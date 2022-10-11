@@ -1,15 +1,12 @@
-"""Provides an API for talking to HD44780 compatible character LCDs.
+"""Provides an API for talking to HD44780 compatible character LCDs."""
 
-   Originally created by Dave Hylands: https://github.com/dhylands/python_lcd
-   Modified by Y. Curtis Wang, Cal State LA for generic MicroPython
-"""
-
-import utime
+import time
 
 class LcdApi:
     """Implements the API for talking with HD44780 compatible character LCDs.
     This class only knows what commands to send to the LCD, and not how to get
     them to the LCD.
+
     It is expected that a derived class will implement the hal_xxx functions.
     """
 
@@ -59,6 +56,7 @@ class LcdApi:
             self.num_columns = 40
         self.cursor_x = 0
         self.cursor_y = 0
+        self.implied_newline = False
         self.backlight = True
         self.display_off()
         self.backlight_on()
@@ -105,6 +103,7 @@ class LcdApi:
 
     def backlight_on(self):
         """Turns the backlight on.
+
         This isn't really an LCD command, but some modules have backlight
         controls, so this allows the hal to pass through the command.
         """
@@ -113,6 +112,7 @@ class LcdApi:
 
     def backlight_off(self):
         """Turns the backlight off.
+
         This isn't really an LCD command, but some modules have backlight
         controls, so this allows the hal to pass through the command.
         """
@@ -128,23 +128,31 @@ class LcdApi:
         addr = cursor_x & 0x3f
         if cursor_y & 1:
             addr += 0x40    # Lines 1 & 3 add 0x40
-        if cursor_y & 2:
-            addr += 0x14    # Lines 2 & 3 add 0x14
+        if cursor_y & 2:    # Lines 2 & 3 add number of columns
+            addr += self.num_columns
         self.hal_write_command(self.LCD_DDRAM | addr)
 
     def putchar(self, char):
         """Writes the indicated character to the LCD at the current cursor
         position, and advances the cursor by one position.
         """
-        if char != '\n':
+        if char == '\n':
+            if self.implied_newline:
+                # self.implied_newline means we advanced due to a wraparound,
+                # so if we get a newline right after that we ignore it.
+                self.implied_newline = False
+            else:
+                self.cursor_x = self.num_columns
+        else:
             self.hal_write_data(ord(char))
             self.cursor_x += 1
-        if self.cursor_x >= self.num_columns or char == '\n':
+        if self.cursor_x >= self.num_columns:
             self.cursor_x = 0
             self.cursor_y += 1
-            if self.cursor_y >= self.num_lines:
-                self.cursor_y = 0
-            self.move_to(self.cursor_x, self.cursor_y)
+            self.implied_newline = (char != '\n')
+        if self.cursor_y >= self.num_lines:
+            self.cursor_y = 0
+        self.move_to(self.cursor_x, self.cursor_y)
 
     def putstr(self, string):
         """Write the indicated string to the LCD at the current cursor
@@ -167,18 +175,21 @@ class LcdApi:
 
     def hal_backlight_on(self):
         """Allows the hal layer to turn the backlight on.
+
         If desired, a derived HAL class will implement this function.
         """
         pass
 
     def hal_backlight_off(self):
         """Allows the hal layer to turn the backlight off.
+
         If desired, a derived HAL class will implement this function.
         """
         pass
 
     def hal_write_command(self, cmd):
         """Write a command to the LCD.
+
         It is expected that a derived HAL class will implement this
         function.
         """
@@ -186,11 +197,16 @@ class LcdApi:
 
     def hal_write_data(self, data):
         """Write data to the LCD.
+
         It is expected that a derived HAL class will implement this
         function.
         """
         raise NotImplementedError
 
+    # This is a default implementation of hal_sleep_us which is suitable
+    # for most micropython implementations. For platforms which don't
+    # support `time.sleep_us()` they should provide their own implementation
+    # of hal_sleep_us in their hal layer and it will be used instead.
     def hal_sleep_us(self, usecs):
         """Sleep for some time (given in microseconds)."""
-        utime.sleep_us(usecs)
+        time.sleep_us(usecs)  # NOTE this is not part of Standard Python library, specific hal layers will need to override this
